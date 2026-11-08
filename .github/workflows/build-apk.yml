@@ -1,0 +1,67 @@
+name: build-apk
+
+# 放到 fork 仓库的 .github/workflows/ 下即可。
+# 触发：手动 / 推 tag / 推 main。
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Flutter 版本不锁死：上游 pubspec 的 sdk 约束会挑合适的；锁死反而容易对不上
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 环境信息
+        run: |
+          flutter --version
+          java -version
+
+      - name: 依赖
+        run: flutter pub get
+
+      # 上游有两个 flavor（lite / tv）。先按 lite 出包，失败再退回无 flavor 的默认构建，
+      # 这样上游改构建脚本时不至于整个 CI 挂掉。
+      - name: 构建 APK
+        run: |
+          set -o pipefail
+          flutter build apk --release --flavor lite --target-platform android-arm64 2>&1 | tee build.log \
+          || flutter build apk --release --target-platform android-arm64 2>&1 | tee -a build.log
+
+      - name: 收集产物
+        if: always()
+        run: |
+          mkdir -p out
+          find build/app/outputs -name '*.apk' -exec cp {} out/ \;
+          ls -lh out || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: md3dl-fork-apk
+          path: |
+            out/*.apk
+            build.log
+          if-no-files-found: warn
+
+      # 打 tag 时顺手建 release，方便直接下载
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: out/*.apk
+          draft: true
